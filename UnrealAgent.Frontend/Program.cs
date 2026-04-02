@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Anthropic.Models.Messages;
+using Microsoft.Extensions.DependencyInjection;
 using UnrealAgent.Backend.Auth;
 
 var Services = new ServiceCollection();
@@ -9,7 +10,6 @@ Services.AddSingleton<AuthConfig>();
 var Provider = Services.BuildServiceProvider();
 var Auth = Provider.GetRequiredService<AuthConfig>();
 
-// Auth 로드 후 유효하지 않으면 재발급(토큰 만료 혹은 저장된 값이 없음)
 Auth.Load();
 if (await Auth.ValidateAsync() is not null)
 {
@@ -25,4 +25,25 @@ if (await Auth.ValidateAsync() is not null)
     }
 }
 
-Console.WriteLine(Auth.GetOAuthAccessToken());
+string ClaudeText = "코딩이나 학습 내용 정리 같은 업무도 도와줄수있나요?";
+
+var Parameters = new MessageCreateParams
+{
+    Model = "claude-opus-4-6",
+    MaxTokens = 1024,
+    System = new List<TextBlockParam>
+    {
+        new() { Text = ClaudeCodeBilling.ComputeHeader(ClaudeText)}
+    },
+    Messages = [new() { Role = Role.User, Content = ClaudeText }]
+};
+
+var Response = await Auth.Client!.Messages.Create(Parameters);
+
+// Console.WriteLine(Response);
+
+foreach (var Block in Response.Content)
+{
+    if (Block.TryPickText(out var Text))
+        Console.WriteLine(Text.Text);
+}

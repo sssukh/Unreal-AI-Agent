@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using System.Text.Json.Nodes;
+using Anthropic;
 
 namespace UnrealAgent.Backend.Auth;
 
@@ -42,6 +43,9 @@ public sealed class AuthConfig(IHttpClientFactory HttpClientFactory)
     /// </summary>
     public void StartOAuthFlow() => OAuth.StartFlow();
     
+    /// <summary>현재 인증 정보로 구성된 Anthropic 클라이언트입니다. 인증 변경 시 자동 갱신됩니다.</summary>
+    public AnthropicClient? Client { get; private set; }
+    
     /// <summary>
     /// 사용자가 복사한 OAuth 인증 코드를 제출하여 토큰 교환을 완료합니다.
     /// </summary>
@@ -70,6 +74,8 @@ public sealed class AuthConfig(IHttpClientFactory HttpClientFactory)
         OAuth.WriteTo(Root);
         
         File.WriteAllText(ConfigPath, Root.ToJsonString(JsonOptions));
+        
+        UpdateClient();
     }
     
     /// <summary>
@@ -87,6 +93,8 @@ public sealed class AuthConfig(IHttpClientFactory HttpClientFactory)
 
         AuthMethod = Root["auth_method"]?.GetValue<string>();
         OAuth.ReadFrom(Root);
+
+        UpdateClient();
     }
 
     /// <summary>
@@ -125,5 +133,33 @@ public sealed class AuthConfig(IHttpClientFactory HttpClientFactory)
         Save();
 
         return true;
+    }
+    
+    /// <summary>
+    /// 현재 인증 상태에 맞는 AnthropicClient를 생성합니다.
+    /// OAuth 사용 시 베타 헤더가 필요합니다.
+    /// </summary>
+    private void UpdateClient()
+    {
+        Client = AuthMethod switch
+        {
+            OAuth.Method => CreateOAuthClient(),
+            _ => null
+        };
+    }
+    
+    /// <summary>
+    /// OAuth 인증용 AnthropicClient를 생성합니다.
+    /// anthropic-beta 헤더를 추가한 HttpClient를 주입합니다.
+    /// </summary>
+    private AnthropicClient CreateOAuthClient()
+    {
+        HttpClient OAuthHttpClient = new();
+        OAuthHttpClient.DefaultRequestHeaders.Add("anthropic-beta", "oauth-2025-04-20");
+        return new AnthropicClient
+        {
+            AuthToken = OAuth.AccessToken,
+            HttpClient = OAuthHttpClient
+        };
     }
 }
