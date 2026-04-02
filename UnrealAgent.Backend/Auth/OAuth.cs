@@ -2,6 +2,7 @@
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace UnrealAgent.Backend.Auth;
@@ -148,6 +149,10 @@ public sealed class OAuth(IHttpClientFactory HttpClientFactory)
         return true;
     }
     
+    /// <summary>
+    /// 인가 코드를 액세스 토큰으로 교환합니다.
+    /// Anthropic 토큰 엔드포인트는 JSON 본문을 기대합니다.
+    /// </summary>
     private async Task<OAuthTokenResponse?> ExchangeCodeAsync(string Code, string State, string CodeVerifier, CancellationToken Ct)
     {
         var Body = new
@@ -190,6 +195,73 @@ public sealed class OAuth(IHttpClientFactory HttpClientFactory)
         AccessToken = NewAccessToken;
         RefreshToken = NewRefreshToken;
         ExpiresAt = NewExpiresAt;
+    }
+    
+    /// <summary>
+    /// JSON 루트에 데이터를 기록합니다.
+    /// </summary>
+    internal void WriteTo(JsonObject Root)
+    {
+        Root["oauth"] = new JsonObject
+        {
+            ["access_token"] = AccessToken,
+            ["refresh_token"] = RefreshToken,
+            ["expires_at"] = ExpiresAt?.ToString("O")
+        };
+    }
+    
+    /// <summary>
+    /// JSON 노드에서 데이터를 읽어옵니다.
+    /// </summary>
+    internal void ReadFrom(JsonNode? Root)
+    {
+        if (Root?["oauth"] is not JsonObject Obj)
+            return;
+
+        AccessToken = Obj["access_token"]?.GetValue<string>();
+        RefreshToken = Obj["refresh_token"]?.GetValue<string>();
+        string? ExpiresAtStr = Obj["expires_at"]?.GetValue<string>();
+        ExpiresAt = ExpiresAtStr is not null ? DateTimeOffset.Parse(ExpiresAtStr) : null;
+    }
+
+    /// <summary>
+    /// 리프레시 토큰으로 새 액세스 토큰을 발급받습니다.
+    /// 성공 시 내부 데이터만 갱신하며, 파일 저장은 AuthConfig가 담당합니다.
+    /// </summary>
+    public async Task<bool> RefreshAsync(CancellationToken Ct = default)
+    {
+        if (RefreshToken is null)
+            return false;
+        
+        var Body = new
+        {
+            grant_type = "refresh_token",
+            client_id = ClientId,
+            refresh_token = RefreshToken
+        };
+        
+        try
+        {
+            HttpClient Client = HttpClientFactory.CreateClient("OAuth");
+            HttpResponseMessage Response = await Client.PostAsJsonAsync(TokenUrl, Body, Ct);
+            if (!Response.IsSuccessStatusCode)
+                return false;
+
+            OAuthTokenResponse? Token = await Response.Content.ReadFromJsonAsync<OAuthTokenResponse>(Ct);
+            if (Token is null)
+                return false;
+
+            SetTokens(
+                Token.AccessToken,
+                Token.RefreshToken ?? RefreshToken,
+                DateTimeOffset.UtcNow.AddSeconds(Token.ExpiresIn));
+
+            return true;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
     }
 }
 
